@@ -8920,7 +8920,7 @@ function _histHasImgM(h){try{return (h||[]).some(function(m){return m&&Array.isA
 function _stripHistImgsM(h){return (h||[]).map(function(m){var n=(m&&m.images&&m.images.length)||0;if(!n)return m;var mm=Object.assign({},m);delete mm.images;var note='[本条消息原附带'+n+'张图片，但当前 API 不支持图片识别，图片未发送]';mm.content=String(mm.content||'')+'\n'+note;return mm})}
 /* 提示缓存：手机端追平电脑版。undefined 视为开启，只有显式 false 才关闭。 */
 function _ccObjM(cfg){return (cfg&&cfg.cacheTtl1h&&cfg.promptCache!==false)?{type:'ephemeral',ttl:'1h'}:{type:'ephemeral'}}
-/* IB OpenRouter Claude cache compatibility patch · 2026-10-07.
+/* IB OpenRouter Claude cache compatibility patch v2 · 2026-10-07.
    Keep the working OpenAI-compatible endpoint and Bearer auth. Only opt in
    on OpenRouter's Claude chat route; do not send Claude fields to other APIs. */
 function _openRouterClaudeCacheM(ep,model,cfg){
@@ -9102,7 +9102,20 @@ async function callAI(cfg,hist,sys,onDelta,signal,pa){
     if(pa&&pa._noThink&&!pa._noThinkOff&&_dsThinkOffM(cfg,ep,model))b.thinking={type:'disabled'};
     if(cfg.promptCache!==false)b.prompt_cache_key='ib_'+String(cfg.id||'');
     const _orCC=_openRouterClaudeCacheM(ep,model,cfg);
-    if(_orCC)b.cache_control=_orCC;/* OpenRouter advances the automatic cache breakpoint with the conversation. */
+    if(_orCC){
+      /* IB rebuilds the latest user message's dynamic tail on each request.
+         It is not replayed in history. Cache stable prefixes explicitly;
+         never cache that changing suffix via a top-level automatic marker. */
+      if(sys){
+        if(_sysTail2&&sys.length>_sysTail2.length+2&&sys.slice(-_sysTail2.length)===_sysTail2){
+          const _orHead=sys.slice(0,sys.length-_sysTail2.length).replace(/\s+$/,'');
+          msgs[0].content=[{type:'text',text:_orHead,cache_control:_ccObjM(cfg)},{type:'text',text:_sysTail2,cache_control:_ccObjM(cfg)}];
+        }else msgs[0].content=[{type:'text',text:sys,cache_control:_ccObjM(cfg)}];
+      }
+      /* Reuse IB's history checkpoints: penultimate message and, for long
+         windows, one 24 messages earlier. At most 4 explicit markers total. */
+      _injectAnthropicMsgCacheM(msgs.slice(sys?1:0),cfg);
+    }
     if(stream&&cfg.promptCache!==false)b.stream_options={include_usage:true};/* 缓存追平电脑版：开启提示缓存时请求 usage 尾块；不支持的中转会走下方去参重试 */
     if(useWS)b.web_search_options={};
     if(cfg.promptCache!==false){try{_ibOaiCacheDiagM(cfg,msgs)}catch(e){}}
