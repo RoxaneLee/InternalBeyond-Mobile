@@ -3863,7 +3863,7 @@ self.addEventListener(&#x27;fetch&#x27;,function(e){
       <div class="tog"><div class="tog-m"><div class="tog-t">支持图片识别（视觉能力）</div><div class="tog-s">开启后图片会编码发送给 API，关闭则仅发文字。默认值按服务商自动设定。</div></div><div class="sw2" id="aset-vision"></div></div>
       <div class="tog"><div class="tog-m"><div class="tog-t">启用联网搜索</div><div class="tog-s">AI 可在对话中检索实时网页信息。不支持的模型会自动跳过。</div></div><div class="sw2" id="aset-web"></div></div>
       <div class="tog"><div class="tog-m"><div class="tog-t">提示缓存（Prompt Caching）</div><div class="tog-s">自动优化缓存命中率以降低输入费用。中转站报 400 错误时可关闭。</div></div><div class="sw2" id="aset-cache"></div></div>
-      <div class="tog"><div class="tog-m"><div class="tog-t">长效缓存（1 小时 TTL）</div><div class="tog-s">缓存保留从 5 分钟延长至 1 小时，适合慢节奏聊天。仅 Anthropic 官方 API 生效。</div></div><div class="sw2" id="aset-cache1h"></div></div>
+      <div class="tog"><div class="tog-m"><div class="tog-t">长效缓存（1 小时 TTL）</div><div class="tog-s">缓存保留从 5 分钟延长至 1 小时，适合间隔超过 5 分钟但会在 1 小时内继续的聊天。支持 Anthropic 格式接口，以及 OpenRouter 的 Claude chat/completions 接口；必须同时开启提示缓存。首次写入较贵，实际命中以服务端 usage 为准。</div></div><div class="sw2" id="aset-cache1h"></div></div>
       <div class="tog"><div class="tog-m"><div class="tog-t">分类器拦截后自动回退（Claude Fable 5 / Opus 5）</div><div class="tog-s">不开＝被拦只在聊天里提示，换个说法再发；开＝被拦的那一轮由回退模型在同一次请求里接手，按接手模型计费，聊天里会提示接手模型。仅 Claude (Anthropic) 官方 API 生效，用别的模型不必打开。</div></div><div class="sw2" id="aset-fb-on"></div></div>
       <div class="f-group" id="aset-fb-g" style="display:none"><label>回退方式</label><div class="sel"><select id="aset-fb"><option value="default">官方默认路由（Anthropic 按拦截类别选模型）</option><option value="list">指定回退模型</option></select></div></div>
       <div class="f-group" id="aset-fb-models-g" style="display:none"><label>回退模型 <span class="lb-note">最多 3 个，逗号分隔</span></label><input id="aset-fb-models" placeholder="claude-opus-4-8"></div>
@@ -8920,6 +8920,18 @@ function _histHasImgM(h){try{return (h||[]).some(function(m){return m&&Array.isA
 function _stripHistImgsM(h){return (h||[]).map(function(m){var n=(m&&m.images&&m.images.length)||0;if(!n)return m;var mm=Object.assign({},m);delete mm.images;var note='[本条消息原附带'+n+'张图片，但当前 API 不支持图片识别，图片未发送]';mm.content=String(mm.content||'')+'\n'+note;return mm})}
 /* 提示缓存：手机端追平电脑版。undefined 视为开启，只有显式 false 才关闭。 */
 function _ccObjM(cfg){return (cfg&&cfg.cacheTtl1h&&cfg.promptCache!==false)?{type:'ephemeral',ttl:'1h'}:{type:'ephemeral'}}
+/* IB OpenRouter Claude cache compatibility patch · 2026-10-07.
+   Keep the working OpenAI-compatible endpoint and Bearer auth. Only opt in
+   on OpenRouter's Claude chat route; do not send Claude fields to other APIs. */
+function _openRouterClaudeCacheM(ep,model,cfg){
+  if(!cfg||cfg.promptCache===false)return null;
+  try{
+    const u=new URL(ep);
+    if(u.protocol!=='https:'||u.hostname.toLowerCase()!=='openrouter.ai'||!/^\/api\/v1\/chat\/completions\/?$/.test(u.pathname))return null;
+    if(!/^(?:anthropic\/)?claude-/i.test(String(model||'')))return null;
+    return _ccObjM(cfg);
+  }catch(e){return null}
+}
 function _anthBetaAddM(hdrs,name){if(!hdrs||!name)return hdrs;var cur=String(hdrs['anthropic-beta']||'').split(',').map(function(x){return x.trim()}).filter(Boolean);if(cur.indexOf(name)<0)cur.push(name);hdrs['anthropic-beta']=cur.join(',');return hdrs}/* v161-p：anthropic-beta 多值合并（逗号分隔、去重），长效缓存与分类器回退两个 beta 共用一行 */
 function _ccBetaM(hdrs,cfg){if(hdrs&&cfg&&cfg.cacheTtl1h&&cfg.promptCache!==false)_anthBetaAddM(hdrs,'extended-cache-ttl-2025-04-11');return hdrs}
 function _anthFallbacksM(cfg){var m=cfg&&cfg.fallbackMode;if(m==='default')return 'default';if(m==='list'){var arr=String(cfg.fallbackModels||'').split(/[,，;；\s]+/).map(function(x){return x.trim()}).filter(Boolean).slice(0,3).map(function(x){return{model:x}});return arr.length?arr:null}return null}
@@ -9044,7 +9056,7 @@ async function callAI(cfg,hist,sys,onDelta,signal,pa){
     const u=j.usage||(j.message&&j.message.usage)||null;
     if(u){
       if(u.input_tokens!=null||u.output_tokens!=null){if(u.input_tokens!=null){_u.i=u.input_tokens;_u.cr=u.cache_read_input_tokens||_u.cr;_u.cw=u.cache_creation_input_tokens||_u.cw}if(u.output_tokens!=null)_u.o=u.output_tokens;_u.seen=true}
-      else if(u.prompt_tokens!=null){var _pc=(u.prompt_tokens_details&&u.prompt_tokens_details.cached_tokens)||(u.input_tokens_details&&u.input_tokens_details.cached_tokens)||u.prompt_cache_hit_tokens||0;try{if(cfg&&cfg.promptCache!==false&&!_u._lg){_u._lg=1;console.info('[IB缓存诊断] usage 原文: '+JSON.stringify(u))}}catch(e2){}_u.i=Math.max(0,(u.prompt_tokens||0)-_pc);_u.cr=_pc;_u.o=u.completion_tokens||_u.o;_u.seen=true;try{_ibCacheHintM(cfg,u.prompt_tokens||0,_pc)}catch(e3){}}
+      else if(u.prompt_tokens!=null){var _pc=(u.prompt_tokens_details&&u.prompt_tokens_details.cached_tokens)||(u.input_tokens_details&&u.input_tokens_details.cached_tokens)||u.prompt_cache_hit_tokens||0;var _pw=(u.prompt_tokens_details&&u.prompt_tokens_details.cache_write_tokens)||(u.input_tokens_details&&u.input_tokens_details.cache_write_tokens)||0;try{if(cfg&&cfg.promptCache!==false&&!_u._lg){_u._lg=1;console.info('[IB缓存诊断] usage 原文: '+JSON.stringify(u))}}catch(e2){}_u.i=Math.max(0,(u.prompt_tokens||0)-_pc-_pw);_u.cr=_pc;_u.cw=_pw;_u.o=u.completion_tokens||_u.o;_u.seen=true;try{_ibCacheHintM(cfg,u.prompt_tokens||0,_pc)}catch(e3){}}
     }
     if(j.usageMetadata){var _gc=j.usageMetadata.cachedContentTokenCount||0;_u.i=Math.max(0,(j.usageMetadata.promptTokenCount||0)-_gc);_u.cr=_gc;_u.o=(j.usageMetadata.candidatesTokenCount||0)+(j.usageMetadata.thoughtsTokenCount||0);_u.seen=true;try{if(cfg&&cfg.promptCache!==false)console.info('[IB手机缓存诊断] usage 原文(gemini): '+JSON.stringify(j.usageMetadata));_ibCacheHintM(cfg,j.usageMetadata.promptTokenCount||0,_gc)}catch(e3){}}
   }catch(e){}};
@@ -9089,6 +9101,8 @@ async function callAI(cfg,hist,sys,onDelta,signal,pa){
     b.max_tokens=maxT;
     if(pa&&pa._noThink&&!pa._noThinkOff&&_dsThinkOffM(cfg,ep,model))b.thinking={type:'disabled'};
     if(cfg.promptCache!==false)b.prompt_cache_key='ib_'+String(cfg.id||'');
+    const _orCC=_openRouterClaudeCacheM(ep,model,cfg);
+    if(_orCC)b.cache_control=_orCC;/* OpenRouter advances the automatic cache breakpoint with the conversation. */
     if(stream&&cfg.promptCache!==false)b.stream_options={include_usage:true};/* 缓存追平电脑版：开启提示缓存时请求 usage 尾块；不支持的中转会走下方去参重试 */
     if(useWS)b.web_search_options={};
     if(cfg.promptCache!==false){try{_ibOaiCacheDiagM(cfg,msgs)}catch(e){}}
